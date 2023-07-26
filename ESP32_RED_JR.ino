@@ -1,4 +1,5 @@
 /*
+                            *** ESP_32_RED_JR ***       
                           --- Audio information ---
                    >>> Download: Game_Audio Library <<<
    http://www.buildlog.net/blog/wp-content/uploads/2018/02/Game_Audio.zip
@@ -42,7 +43,7 @@
 //////////////////////////////////////////////////////////
 // Two time zones, voice prompts and Pac-Man animations //
 //////////////////////////////////////////////////////////
-static String HWversion = "v1.55"; // Control loads, depending on solar production
+static String HWversion = "v1.56"; // Control loads, depending on solar production
 
 ////////////////////////// INVERTER //////////////////////////////////////////////
 static String IPinverter = "192.168.1.112";
@@ -60,7 +61,7 @@ bool errInverter = false;
 bool display_inverter = true;
 long clkTimeF = 0;      // Inverter Check Timer
 long clkTimeO = 0;      // Timer to Blink over Grid Power
-long clkTimeA = 0;      // AIRE Check Timer
+long clkTimeR = 0;      // RED Check Timer
 float E_Total = 0;      // Total kWh 
 float E_Day = 0;        // Day kWh  
 int P_PV = 0;           // Solar W 
@@ -74,8 +75,10 @@ bool Manual_FORCED = false;
 bool Status_RED = false;
 bool Status_BACK = false;
 bool RED1 = true;
-int Min_RED = 1;         // Minutes between two automatic actions
-int Cont_Min = 0;        // Minute counter
+int Min_RED = 1;        // Minutes between two automatic actions to OFF
+int Min_ON = 3;         // Minutes between two AC automatic actions to ON  
+int Cont_Min = 0;       // Minute counter
+int Sampling = 0;       // Counter for sampling ON/OFF thresholds
 int RED_ON = -1200;
 int RED_OFF = -100;
 
@@ -210,10 +213,10 @@ void setup() {
   digitalWrite(OUT_CONTROL, LOW);   // CONTROL = OFF
   Status_RED = false;
   pinMode(IN_RED, INPUT_PULLUP);    // Status Input Pull-Up (Status RED: ON/OFF)
-  clkTimeA = millis();  
   readConfig();
   load_RED();
-
+  initInterval();
+  
   lc=LedController<1,1>(DIN_PIN,CLK_PIN,CS_PIN);
 
   /*
@@ -235,7 +238,7 @@ void setup() {
 
   display.setTextSize(1);   
   display.setCursor(2,16);   
-  display.println(F("TIME-INVER"));
+  display.println(F("TIME-C.RED"));
   display.setCursor(15,26);   
   display.println(HWversion);
 
@@ -249,7 +252,7 @@ void setup() {
   }else{
     mText = mText + zone2;    
   }
-  mText = mText + "  " + HWversion + " ";
+  mText = mText + " RED  " + HWversion + " ";
   scrollText();
   delay(1000);
 
@@ -308,7 +311,7 @@ void setup() {
   checkServer();
  
   // Debug first message 
-  String stringMsg = "ESP32_Solar_JR " + HWversion + " - RTC: ";
+  String stringMsg = "ESP32_RED_JR " + HWversion + " - RTC: ";
   if (T_Zone2 == false) {
     stringMsg = stringMsg + zone1;    
   }else{
@@ -442,29 +445,29 @@ void readConfig(){
 
   // 0 - Display Status 
   display_EU = EEPROM.read(0);
-  PRINT("\ndisplay_EU: ",display_EU);
+  PRINT("\ndisplay_EU = ",display_EU);
 
   // 1 - Display Date  
   display_date = EEPROM.read(1);
-  PRINT("\ndisplay_date: ",display_date);
+  PRINT("\ndisplay_date = ",display_date);
   
   // 2 - Matrix Brightness  
   brightness = EEPROM.read(2);
-  PRINT("\nbrightness: ",brightness);
+  PRINT("\nbrightness = ",brightness);
   lc.setIntensity(brightness);
   
   // 3 - Display Inverter  
   display_inverter = EEPROM.read(3);
-  PRINT("\ndisplay_inverter: ",display_inverter);
+  PRINT("\ndisplay_inverter = ",display_inverter);
 
   // 4 - Inverter Mode  
   inverter_mode = EEPROM.read(4);
   if (inverter_mode > 2) {
-    inverter_mode  = 2;
+    inverter_mode = 2;
     EEPROM.write(4, inverter_mode);
   }
 
-  PRINT("\ninverter_mode: ",inverter_mode);
+  PRINT("\ninverter_mode = ",inverter_mode);
 
   // 5 - Speed Matrix (delay)  
   matrix_speed = EEPROM.read(5);
@@ -472,9 +475,9 @@ void readConfig(){
     matrix_speed = 25;
     EEPROM.write(5, matrix_speed);
   }
-  PRINT("\nmatrix_speed: ",matrix_speed);
+  PRINT("\nmatrix_speed = ",matrix_speed);
 
-  PRINT("\nalarm_H: ",alarm_H);
+  PRINT("\nalarm_H = ",alarm_H);
 
     // 7 - Night_OLED (true/false)
   Night_OLED = EEPROM.read(7);
@@ -482,7 +485,7 @@ void readConfig(){
     Night_OLED = true;
     EEPROM.write(7, Night_OLED);
   }
-  PRINT("\nNight_OLED: ",Night_OLED);
+  PRINT("\nNight_OLED = ",Night_OLED);
 
   // 8 - RED1 (true/false)
   RED1 = EEPROM.read(8);
@@ -490,8 +493,7 @@ void readConfig(){
     RED1 = true;
     EEPROM.write(8, RED1);
   }
-  PRINT("\nUmbral RED1: ",RED1);
-
+  PRINT("\nUmbral RED = ",RED1);
   
   // 9 - sound_chime (ON/OFF)
   sound_chime = EEPROM.read(9);
@@ -499,7 +501,17 @@ void readConfig(){
     sound_chime = true;
     EEPROM.write(9, sound_chime);
   }
-  PRINT("\nCarrillon: ",sound_chime);
+  PRINT("\nCarrillon = ",sound_chime);
+
+  // 10 - Delay RED_ON 
+  Min_ON = EEPROM.read(10);
+  if (Min_ON < 1 || Min_ON > 30) {
+    Min_ON = 1;
+    EEPROM.write(10, Min_ON);
+  }
+  PRINT("\nMinutes RED_ON > ",Min_ON);    // Minutes between two RED automatic actions to ON
+  PRINT("\nMinutes RED_OFF > ",Min_RED);  // Minutes between two RED automatic actions to OFF
+
 
   // 13 - Time Zone
   T_Zone2 = EEPROM.read(13);
@@ -652,9 +664,13 @@ void oled_power() {
   display.clearDisplay();
   if (Hide_OLED == false) {
     int p;
-    display.setCursor(8,0);   // center time display
     display.setTextSize(1);   
-    display.println(CurrentTime);
+    if (display_EU == true) {
+      display.setCursor(8,0);   // center EU time display
+    }else {
+      display.setCursor(0,0);   // center USA time display
+    }
+    display.println(CurrentTime.substring(0,10));
   
     // Power select to OLED dispaly
     display.setTextSize(2);   
@@ -873,7 +889,11 @@ void append_webpage_header() {
   webpage += "#header    {background-color:#C3E0E8; width:1000px; padding:10px; color:#13414E; font-size:32px;}";
   webpage += "#section   {background-color:#E6F5F9; width:980px; padding:10px; color:#0D7693 ; font-size:20px;}";
   webpage += "#footer    {background-color:#C3E0E8; width:980px; padding:10px; color:#13414E; font-size:24px; clear:both;}";
- 
+
+  webpage += ".content-select select::-ms-expand {display: none;}";
+  webpage += ".content-input input,.content-select select{appearance: none;-webkit-appearance: none;-moz-appearance: none;}";
+  webpage += ".content-select select{background-color:#C3E0E8; width:20%; padding:10px; color:#0D7693 ; font-size:48px ; border:6px solid rgba(0,0,0,0.2) ; border-radius: 12px;}";
+
   webpage += ".button {box-shadow: 0px 10px 14px -7px #276873; background:linear-gradient(to bottom, #599bb3 5%, #408c99 100%);";
   webpage += "background-color:#599bb3; border-radius:8px; color:white; padding:13px 32px; display:inline-block; cursor:pointer;";
   webpage += "text-decoration:none;text-shadow:0px 1px 0px #3d768a; font-size:50px; font-weight:bold; margin:2px;}";
@@ -896,8 +916,10 @@ void append_webpage_header() {
   webpage += "</style>";
  
   webpage += "<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css\"/>";
-  webpage += "<html><head><title>NTP Time & Inverter</title>";
+  webpage += "<html><head><title>NTP Time & Control RED</title>";
   webpage += "</head>";
+
+  /////////////////////////////////
   webpage += "<script>";
   webpage += "function SendBright()";
   webpage += "{";
@@ -907,9 +929,24 @@ void append_webpage_header() {
   webpage += "  request.open(\"GET\", strLine, false);";
   webpage += "  request.send(null);";
   webpage += "}";
+  /////////////////////////////////
+  webpage += "function GetInterval()";
+  webpage += "{";
+  webpage += "  strInterval = \"\";";
+  webpage += "  var request = new XMLHttpRequest();";
+  webpage += "  var sel_interval = document.getElementById(\"selInterval\");";   // get the values from the drop-down select boxes
+  webpage += "  if (sel_interval.selectedIndex > 0) {";
+  webpage += "  strInterval = \"I=\" + sel_interval.options[sel_interval.selectedIndex].text;";
+  webpage += "  } else {";
+  webpage += "  strInterval = \"\";}";  // the first item in the drop-down box is invalid text, so clear the string
+  webpage += "  request.open(\"GET\", strInterval, false);";
+  webpage += "  request.send(null);";
+  webpage += "}";
   webpage += "</script>";
+  /////////////////////////////////
+  
   webpage += "<div id=\"mark\">";
-  webpage += "<div id=\"header\"><h1 class=\"animate__animated animate__flash\">NTP Time & Inverter " + HWversion + "</h1>";
+  webpage += "<div id=\"header\"><h1 class=\"animate__animated animate__flash\">NTP Time & Control RED " + HWversion + "</h1>";
 }
 //////////////////////////////////////////////////////////////////////////////
 void button_Home() {
@@ -960,18 +997,23 @@ void NTP_Clock_home_page() {
 
   webpage += "<div id=\"section\">";
   button_Home();
-  webpage += "<p><a href=\"\\DISPLAY_MODE_USA\"><type=\"button\" class=\"button\">USA mode</button></a>";
-  webpage += "<a href=\"\\DISPLAY_MODE_EU\"><type=\"button\" class=\"button\">EU mode</button></a></p>";
-
-  webpage += "<p><a href=\"\\DISPLAY_DATE\"><type=\"button\" class=\"button\">Show Date";
-  if (display_date==true) webpage += " = ON"; 
+  
+  webpage += "<p><a href=\"\\DISPLAY_MODE_USA\"><type=\"button\" class=\"button\">USA mode";
+  if (display_EU == false) webpage += " #";
   webpage += "</button></a>";
-  webpage += "<a href=\"\\DISPLAY_NO_DATE\"><type=\"button\" class=\"button\">Only Time";
-  if (display_date==false) webpage += " = ON"; 
+  webpage += "<a href=\"\\DISPLAY_MODE_EU\"><type=\"button\" class=\"button\">EU mode";
+  if (display_EU == true) webpage += " #";
   webpage += "</button></a></p>";
 
-  webpage += "<p><a href=\"\\CARRILLON\"><type=\"button\" class=\"button\">Chime ";
-  if (sound_chime==true) webpage += "OFF"; else webpage += "ON"; 
+  webpage += "<p><a href=\"\\DISPLAY_DATE\"><type=\"button\" class=\"button\">Show Date";
+  if (display_date==true) webpage += " #"; 
+  webpage += "</button></a>";
+  webpage += "<a href=\"\\DISPLAY_NO_DATE\"><type=\"button\" class=\"button\">Only Time";
+  if (display_date==false) webpage += " #"; 
+  webpage += "</button></a></p>";
+
+  webpage += "<p><a href=\"\\CARRILLON\"><type=\"button\" class=\"button\">Chime = ";
+  if (sound_chime==true) webpage += "ON"; else webpage += "OFF"; 
   webpage += "</button></a>";
   webpage += "<a href=\"\\sPAC\"><type=\"button\" class=\"button\">Pac-Man</button></a>";
   webpage += "<a href=\"\\SOUND\"><type=\"button\" class=\"button\">Sound TIME</button></a></p>";
@@ -981,18 +1023,18 @@ void NTP_Clock_home_page() {
   webpage += brightness;
   webpage += "\"> (15)MAX</a></form>";
   
-  webpage += "<p><a href=\"\"><type=\"button\" onClick=\"SendBright()\" class=\"button\">Send Brightness</button></a>";
+  webpage += "<p><a href=\"\\HOME\"><type=\"button\" onClick=\"SendBright()\" class=\"button\">Send Brightness</button></a>";
   if (Night_OLED == true ) {
-    webpage += "<a href=\"\\NIGHT\"><type=\"button\" class=\"button\">OLED: Night</button></a></p>";
+    webpage += "<a href=\"\\NIGHT\"><type=\"button\" class=\"button\">OLED = Night</button></a></p>";
   }else {
-    webpage += "<a href=\"\\DAY\"><type=\"button\" class=\"button\">OLED: Day</button></a></p>";
+    webpage += "<a href=\"\\DAY\"><type=\"button\" class=\"button\">OLED = Day</button></a></p>";
   }
   
   webpage += "<p><a href=\"\\DISPLAY_INVERTER\"><type=\"button\" class=\"button\">Inverter";
-  if (display_inverter==true) webpage += " = ON"; 
+  if (display_inverter==true) webpage += " #"; 
   webpage += "</button></a>";
   webpage += "<a href=\"\\DISPLAY_NO_INVERTER\"><type=\"button\" class=\"button\">Only Time";
-  if (display_inverter==false) webpage += " = ON"; 
+  if (display_inverter==false) webpage += " #"; 
   webpage += "</button></a></p>";
   
   webpage += "<p><a href=\"\\DISPLAY_INVERTER_MODE=0\"><type=\"button\" class=\"button\">Solar";
@@ -1007,10 +1049,26 @@ void NTP_Clock_home_page() {
   webpage += "</button></a>";
 
   if (display_inverter==true) {
-    webpage += "<p><a href=\"\\UMBRAL_AC\"><type=\"button\" class=\"button\">";
+    // Interval: Min_On
+    webpage += "<div class=\"content-select\">";
+    webpage += "<select id=\"selInterval\">";
+    webpage += "<option selected=\"selected\" value=\"\">ON>";
+    webpage += Min_ON; 
+    webpage += "'</option><option value=\"1\">1</option>";
+    webpage += "<option value=\"3\">3</option>";
+    webpage += "<option value=\"5\">5</option>";
+    webpage += "<option value=\"10\">10</option>";
+    webpage += "<option value=\"15\">15</option>";
+    webpage += "<option value=\"30\">30</option>";
+    webpage += "</select>";
+    webpage += "<a href=\"\\HOME\"><type=\"button\" onClick=\"GetInterval()\" class=\"button\">: Send</button></a>";
+    
+    // Device preset
+    webpage += "<a href=\"\\UMBRAL_AC\"><type=\"button\" class=\"button\">";
     if (RED1==true) webpage += "1"; else webpage += "2"; 
     webpage += " kW</button></a>";
 
+    // RED: ON/OFF
     webpage += "<a href=\"\\RED_C\"><type=\"button\" class=\"button\">RED = ";
     if (Status_RED==true){
       if (Manual_FORCED==true) webpage += " F-";
@@ -1018,16 +1076,21 @@ void NTP_Clock_home_page() {
     }else {
       webpage += "OFF"; 
     }
-    webpage += "</button></a></p>";
+    webpage += "</button></a>";
   }
+  
   webpage += "</p><br><hr class=\"line\">";
 
-  webpage += "<p><a href=\"\\RESTART_1\"><type=\"button\" class=\"button\">RTC: ";
+  webpage += "<p><a href=\"\\RESTART_1\"><type=\"button\" class=\"button\">RTC = ";
   webpage += zone1;
+  if (T_Zone2 == false)  webpage += " #";
   webpage += "</button></a>";
-  webpage += "<a href=\"\\RESTART_2\"><type=\"button\" class=\"button\">RTC: ";
+
+  webpage += "<a href=\"\\RESTART_2\"><type=\"button\" class=\"button\">RTC = ";
   webpage += zone2;
+  if (T_Zone2 == true)  webpage += " #";
   webpage += "</button></a></p>";
+
   webpage += "<br><p><a href=\"\\RESET_WIFI\"><type=\"button\" class=\"button button2\">Reset WiFi</button></a></p>";
   webpage += "</div>";
   end_webpage();
@@ -1120,6 +1183,13 @@ void save_RED1() {
 void save_Chime() {
   EEPROM.begin(EEPROM_SIZE);
   EEPROM.write(9, sound_chime);
+  end_Eprom();
+}
+//////////////////////////////////////////////////////////////
+void save_Interval() {
+  initInterval();
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.write(10, Min_ON);
   end_Eprom();
 }
 //////////////////////////////////////////////////////////////
@@ -1377,32 +1447,75 @@ void _bright_15() {
 void _save_bright(){
   brightness_matrix();
   responseWeb();
+  responseWeb();
+}
+/////////////////////////////////////////////////////////////////
+void _interval_1() {
+  Min_ON = 1; 
+  PRINTS("\n-> Delay RED_ON > 1 minute");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _interval_3() {
+  Min_ON = 3; 
+  PRINTS("\n-> Delay RED_ON > 3 minutes");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _interval_5() {
+  Min_ON = 5; 
+  PRINTS("\n-> Delay RED_ON > 5 minutes");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _interval_10() {
+  Min_ON = 10; 
+  PRINTS("\n-> Delay RED_ON > 10 minutes");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _interval_15() {
+  Min_ON = 15; 
+  PRINTS("\n-> Delay AC_ON > 15 minutes");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _interval_30() {
+  Min_ON = 30; 
+  PRINTS("\n-> Delay RED_ON > 30 minutes");
+  _save_interval();    
+}
+/////////////////////////////////////////////////////////////////
+void _save_interval(){
+  save_Interval();
+  responseWeb();
+  responseWeb();
 }
 /////////////////////////////////////////////////////////////////
 void _night(){
   Night_OLED = false;
-  PRINTS("\n-> OLED: Day");
+  PRINTS("\n-> OLED = Day");
   oled_night_toggle();
   responseWeb();
 }
 /////////////////////////////////////////////////////////////////
 void _day(){
   Night_OLED = true;
-  PRINTS("\n-> OLED: Night");
+  PRINTS("\n-> OLED = Night");
   oled_night_toggle();
   responseWeb();
 }
 /////////////////////////////////////////////////////////////////
 void _restart_1() {
   T_Zone2=false;
-  PRINT("\n>>> SYNC Time: ",zone1);
+  PRINT("\n>>> SYNC Time = ",zone1);
   set_Zone2();
   _restart();
 }
 /////////////////////////////////////////////////////////////////
 void _restart_2() {
   T_Zone2=true;
-  PRINT("\n>>> SYNC Time: ",zone2);
+  PRINT("\n>>> SYNC Time = ",zone2);
   set_Zone2();
   _restart();
 }
@@ -1434,12 +1547,6 @@ void _umbral_ac() {
   load_RED();
  
   PRINT("\n-> Umbral RED1 = ", RED1);
-  
-  // CONTROL = OFF
-  digitalWrite(OUT_CONTROL, LOW);  // CONTROL = OFF
-  Status_RED = false;
-  setRED();
-
   responseWeb();
   save_RED1();
 }
@@ -1452,8 +1559,9 @@ void load_RED(){
     RED_ON = -2200;
     RED_OFF = -100;
   }
-  PRINT("\n-> RED_ON = ", RED_ON);
-  PRINT("\n-> RED_OFF = ", RED_OFF);
+  PRINT("\n-> W. to RED_ON > ", RED_ON);
+  PRINT("\n-> W. to RED_OFF < ", RED_OFF);
+  PRINTS("\n");
 }
 /////////////////////////////////////////////////////////////////
 void _red_c() {
@@ -1506,8 +1614,8 @@ void checkServer(){
   server.on("/BRIGHT=3", _bright_3); 
   server.on("/BRIGHT=4", _bright_4); 
   server.on("/BRIGHT=5", _bright_5); 
-  server.on("/BRIGHT=5", _bright_6); 
-  server.on("/BRIGHT=7", _bright_6); 
+  server.on("/BRIGHT=6", _bright_6); 
+  server.on("/BRIGHT=7", _bright_7); 
   server.on("/BRIGHT=8", _bright_8); 
   server.on("/BRIGHT=9", _bright_9); 
   server.on("/BRIGHT=10", _bright_10); 
@@ -1516,6 +1624,12 @@ void checkServer(){
   server.on("/BRIGHT=13", _bright_13); 
   server.on("/BRIGHT=14", _bright_14); 
   server.on("/BRIGHT=15", _bright_15); 
+  server.on("/I=1", _interval_1); 
+  server.on("/I=3", _interval_3); 
+  server.on("/I=5", _interval_5); 
+  server.on("/I=10", _interval_10); 
+  server.on("/I=15", _interval_15); 
+  server.on("/I=30", _interval_30); 
   server.on("/NIGHT", _night);
   server.on("/DAY", _day);
   server.on("/HOME", _home);
@@ -1661,13 +1775,21 @@ void playIP(){
 /////////////////////////////////////////////////////////////////
 void testRed(){
   setRED();
-  if(millis()-clkTimeA > 60000){
-    clkTimeA = millis();
+  
+  if((P_Grid < RED_ON && Status_RED == false) || (P_Grid > RED_OFF && Status_RED == true)){
+    if (Sampling < 250) Sampling = Sampling + 1;       
+  }else{
+    Sampling = 0;
+  }
+
+  if(millis()-clkTimeR > 60000){
+    clkTimeR = millis();
     Cont_Min = Cont_Min - 1;
 
     // Test AUTO RED ON/OFF
     if  ((msgRED == "G-AOF" || msgRED == "G-AON") && Cont_Min < 1){
-      if((P_Grid < RED_ON && Status_RED == false) || (P_Grid > RED_OFF && Status_RED == true)){
+      if(Sampling > 20){
+        Sampling = 0;
         Manual_RED = false;
         changeRED(); // >>> PULSA RED (AUTO) 
       }
@@ -1692,9 +1814,19 @@ void changeRED() {
   
   // Show status RED
   setRED();
-  delay (1000);
+  initInterval();
 }
- /////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
+void initInterval() {
+  clkTimeR = millis();
+  Sampling = 0;
+  if(Status_RED == true){  
+    Cont_Min = Min_RED;             
+  }else {
+    Cont_Min = Min_ON;             
+  }
+}
+/////////////////////////////////////////////////////////////////
 void setRED() {
   if(digitalRead(IN_RED) == LOW) {
       digitalWrite(OUT_CONTROL, HIGH);  // CONTROL = ON
@@ -1713,8 +1845,7 @@ void setRED() {
   // Reload, minutes between two automatic RED actions
   if (Status_BACK != Status_RED) {
     Status_BACK = Status_RED;
-    clkTimeA = millis();
-    Cont_Min = Min_RED; 
+    initInterval();
   }
  
   if (Manual_RED == true){
@@ -1736,6 +1867,7 @@ void setRED() {
     }
   }
   matrix_RED();
+  delay (1000);
 }
 /////////////////////////////////////////////////////////////////
 void getInverter() {
